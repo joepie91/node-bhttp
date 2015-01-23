@@ -22,6 +22,10 @@ All these issues (and more) are solved in `bhttp`. It offers the following:
 * Streaming requests are kept out of the agent pool - ie. no blocking of other requests.
 * Optionally, a Promises API (you can also use nodebacks).
 
+## Caveats
+
+* `bhttp` does not yet use a HTTPS-capable agent. This means that all SSL-related options are currently ignored (per Node.js `http` documentation). If you need secure HTTPS requests, make sure to specify a custom agent!
+
 ## License
 
 [WTFPL](http://www.wtfpl.net/txt/copying/) or [CC0](https://creativecommons.org/publicdomain/zero/1.0/), whichever you prefer. A donation and/or attribution are appreciated, but not required.
@@ -103,7 +107,7 @@ Convenience methods that pre-set the request method, and automatically send alon
 
 * __url__: The URL to request, with protocol. When using HTTPS, please be sure to read the 'Caveats' section.
 * __data__: *Optional, only for POST/PUT/PATCH.* The payload to send along.
-* __options__: *Optional.* Extra options for the request. More details under the documentation forthe `bhttp.request` method below.
+* __options__: *Optional.* Extra options for the request. More details under the documentation for the `bhttp.request` method below.
 * __callback__: *Optional.* When using the nodeback API, the callback to use. If not specified, a Promise will be returned.
 
 The `data` payload can be one of the following things:
