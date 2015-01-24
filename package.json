@@ -1,6 +1,6 @@
 {
   "name": "bhttp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A sane HTTP client library for Node.js with Streams2 support.",
   "main": "index.js",
   "scripts": {

@@ -414,7 +414,7 @@ processResponse = (request, response, requestState) ->
 
 # Some wrappers
 
-doPayloadRequest = (url, data, options) ->
+doPayloadRequest = (url, data, options, callback) ->
 	# A wrapper that processes the second argument to .post, .put, .patch shorthand API methods.
 	# FIXME: Treat a {} for data as a null? Otherwise {} combined with inputBuffer/inputStream will error.
 	if isStream(data)
@@ -424,7 +424,7 @@ doPayloadRequest = (url, data, options) ->
 	else
 		options.formFields = data
 
-	@request url, options
+	@request url, options, callback
 
 redirectGet = (request, response, requestState) ->
 	debug "following forced-GET redirect to %s", response.headers["location"]
@@ -469,22 +469,22 @@ createCookieJar = (jar) ->
 bhttpAPI =
 	head: (url, options = {}, callback) ->
 		options.method = "head"
-		@request url, options
+		@request url, options, callback
 	get: (url, options = {}, callback) ->
 		options.method = "get"
-		@request url, options
+		@request url, options, callback
 	post: (url, data, options = {}, callback) ->
 		options.method = "post"
-		doPayloadRequest.bind(this) url, data, options
+		doPayloadRequest.bind(this) url, data, options, callback
 	put: (url, data, options = {}, callback) ->
 		options.method = "put"
-		doPayloadRequest.bind(this) url, data, options
+		doPayloadRequest.bind(this) url, data, options, callback
 	patch: (url, data, options = {}, callback) ->
 		options.method = "patch"
-		doPayloadRequest.bind(this) url, data, options
+		doPayloadRequest.bind(this) url, data, options, callback
 	delete: (url, data, options = {}, callback) ->
 		options.method = "delete"
-		@request url, options
+		@request url, options, callback
 	request: (url, options = {}, callback) ->
 		@_doRequest(url, options).nodeify(callback)
 	_doRequest: (url, options, requestState) ->
