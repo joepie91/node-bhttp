@@ -1,6 +1,7 @@
 # FIXME: Force-lowercase user-supplied headers before merging them into the request?
 # FIXME: Deep-merge query-string arguments between URL and argument?
 # FIXME: Named arrays for multipart/form-data?
+# FIXME: Are arrays of streams in `data` correctly recognized as being streams?
 
 # Core modules
 urlUtil = require "url"

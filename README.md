@@ -49,6 +49,7 @@ Be aware that by making a pull request, you agree to release your modifications 
 A simple example:
 
 ```javascript
+var Promise = require("bluebird");
 var bhttp = require("bhttp");
 
 Promise.try(function() {
@@ -73,6 +74,7 @@ bhttp.get("http://icanhazip.com/", {}, function(err, response) {
 Demonstrating both streaming responses and using a stream in form data for a request:
 
 ```javascript
+var Promise = require("bluebird");
 var bhttp = require("bhttp");
 
 Promise.try(function() {
@@ -107,6 +109,7 @@ bhttp.get("http://somesite.com/bigfile.mp4", {stream: true}, function(err, respo
 ### Sessions
 
 ```javascript
+var Promise = require("bluebird");
 var bhttp = require("bhttp");
 
 var session = bhttp.session({ headers: {"user-agent": "MyCustomUserAgent/2.0"} });
