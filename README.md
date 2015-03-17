@@ -117,9 +117,9 @@ var session = bhttp.session({ headers: {"user-agent": "MyCustomUserAgent/2.0"} }
 // Our new session now automatically has a cookie jar, and also uses our preset option(s).
 
 Promise.try(function(){
-	session.get("http://hypotheticalsite.com/cookietest"); // Assume that this site now sets a cookie
+	return session.get("http://hypotheticalsite.com/cookietest"); // Assume that this site now sets a cookie
 }).then(function(response){
-	session.get("http://hypotheticalsite.com/other-endpoint"); // This now sends along the cookie!
+	return session.get("http://hypotheticalsite.com/other-endpoint"); // This now sends along the cookie!
 });
 ```
 
