@@ -2,3 +2,5 @@
 # https://help.github.com/articles/ignoring-files
 # Example .gitignore files: https://github.com/github/gitignore
 /node_modules/
+/test-exit2.js
+/test-exit.coffee

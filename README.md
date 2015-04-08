@@ -2,11 +2,13 @@
 
 A sane HTTP client library for Node.js with Streams2 support.
 
+![](//img.shields.io/gratipay/joepie91.svg)
+
 ## Why bhttp?
 
 There are already a few commonly used HTTP client libraries for Node.js, but all of them have issues:
 
-* The core `http` module is rather low-level, and even relatively simple requests take a lot of work to make correctly. It also automatically uses an agent for HTTP requests, which slows down concurrent HTTP requests when you're streaming the responses somewhere.
+* The core `http` module is rather low-level, and even relatively simple requests take a lot of work to make correctly. It also automatically uses a limited amount of agents for HTTP requests (in Node.js 0.10), which slows down concurrent HTTP requests when you're streaming the responses somewhere.
 * `request` is buggy, only supports old-style streams, has the same 'agent' problem as `http`, the documentation is poor, and the API is not very intuitive.
 * `needle` is a lot simpler, but suffers from the same 'agent' problem, and the API can be a bit annoying in some ways. It also doesn't have a proper session API.
 * `hyperquest` (mostly) solves the 'agent' problem correctly, but has a very spartan API. Making non-GET requests is more complex than it should be.
@@ -21,10 +23,13 @@ All these issues (and more) are solved in `bhttp`. It offers the following:
 * Easy-to-use session mechanics - a new session will automatically give you a new cookie jar, cookies are kept track of automatically, and 'default options' are deep-merged.
 * Streaming requests are kept out of the agent pool - ie. no blocking of other requests.
 * Optionally, a Promises API (you can also use nodebacks).
+* Progress events! For both uploading and downloading.
 
 ## Caveats
 
-* `bhttp` does not yet use a HTTPS-capable agent. This means that all SSL-related options are currently ignored (per Node.js `http` documentation). If you need secure HTTPS requests, make sure to specify a custom agent!
+`bhttp` does not yet use a HTTPS-capable agent. This means that all SSL-related options are currently ignored by default (per Node.js `http` documentation).
+
+__This does *not* mean that you cannot use `bhttp` for HTTPS requests!__ If you need secure HTTPS requests, just make sure to specify a [custom `https` agent](https://nodejs.org/api/https.html#https_class_https_agent).
 
 ## License
 
@@ -106,6 +111,44 @@ bhttp.get("http://somesite.com/bigfile.mp4", {stream: true}, function(err, respo
 })
 ```
 
+### Progress events
+
+Upload progress events:
+
+```javascript
+var Promise = require("bluebird");
+var bhttp = require("bhttp");
+
+Promise.try(function() {
+	return bhttp.post("http://somehostingservice.com/upload", {
+		file: fs.createReadStream("./bigfile.mkv")
+	}, {
+		onUploadProgress: function(completedBytes, totalBytes) {
+			console.log("Upload progress:", (completedBytes / totalBytes * 100), "%");
+		}
+	});
+}).then(function(response) {
+	console.log("Response from hosting service:", response.body.toString());
+});
+```
+
+Download progress events:
+
+```javascript
+var Promise = require("bluebird");
+var bhttp = require("bhttp");
+
+Promise.try(function() {
+	return bhttp.get("http://somehostingservice.com/bigfile.mkv", {stream: true});
+}).then(function(response) {
+	response.on("progress", function(completedBytes, totalBytes) {
+		console.log("Download progress:", (completedBytes / totalBytes * 100), "%");
+	});
+
+	response.pipe(fs.createWriteStream("./bigfile.mkv"));
+});
+```
+
 ### Sessions
 
 ```javascript
@@ -124,6 +167,8 @@ Promise.try(function(){
 ```
 
 ## API
+
+The various error types are documented at the bottom of this README.
 
 ### bhttp.head(url, [options, [callback]])
 ### bhttp.get(url, [options, [callback]])
@@ -149,6 +194,8 @@ The `data` payload can be one of the following things:
 
 Makes a request, and returns the response object asynchronously. The response object is a standard `http.IncomingMessages` with a few additional properties (documented below the argument list).
 
+Note that (progress) event handlers must be specified in the `options` or (in the case of download progress events) as an event listener on the response object - as `bhttp` uses Promises, it is not technically possible to return an EventEmitter.
+
 * __url__: The URL to request, with protocol. When using HTTPS, please be sure to read the 'Caveats' section.
 * __options__: *Optional.* Extra options for the request. Any other options not listed here will be passed on directly to the `http` or `https` module.
 	* __Basic options__
@@ -169,10 +216,14 @@ Makes a request, and returns the response object asynchronously. The response ob
 	* __Advanced options__
 		* __method__: The request method to use. You don't need this when using the shorthand methods.
 		* __cookieJar__: A custom cookie jar to use. You'll probably want to use `bhttp.session()` instead.
+		* __responseTimeout__: The timeout, in milliseconds, after which the request should be considered to have failed if no response is received yet. Note that this measures from the start of the request to the start of the response, and is *not* a connection timeout. If a timeout occurs, a ResponseTimeoutError will be thrown asynchronously (see error documentation below).
 		* __allowChunkedMultipart__: *Defaults to `false`.* Many servers don't support `multipart/form-data` when it is transmitted with chunked transfer encoding (eg. when the stream length is unknown), and silently fail with an empty request payload - this is why `bhttp` disallows it by default. If you are *absolutely certain* that the endpoint supports this functionality, you can override the behaviour by setting this to `true`.
 		* __discardResponse__: *Defaults to `false`.* Whether to throw away the response without reading it. Only really useful for fire-and-forget calls. This is almost never what you want.
 		* __keepRedirectResponses__: *Defaults to `false`.* Whether to keep the response streams of redirects. You probably don't need this. __When enabling this, you must *explicitly* read out every single redirect response, or you will experience memory leaks!__
 		* __justPrepare__: *Defaults to `false`.* When set to `true`, bhttp just prepares the request, and doesn't actually carry it out; useful if you want to make some manual modifications. Instead of a response, the method will asynchronously return an array with the signature `[request, response, requestState]` that you will need to pass into the `bhttp.makeRequest()` method.
+	* __Event handlers__
+		* __onUploadProgress__: A callback to call for upload progress events (this covers both input streams and form data). The callback signature is `(completedBytes, totalBytes, request)`. If the total size is not known, `totalBytes` will be `undefined`. The `request` variable will hold the request object that the progress event applies to - this is relevant when dealing with automatic redirect following, where multiple requests may occur.
+		* __onDownloadProgress__: A callback to call for download progress events. The callback signature is `(completedBytes, totalBytes, response)`. If the total size is not known, `totalBytes` will be `undefined`. The `response` variable will hold the response object that the progress event applies to - this is relevant when dealing with automatic redirect following, where multiple responses may occur. *Note that using the `progress` event on a response object is usually a more practical option!*
 
 * __callback__: *Optional.* When using the nodeback API, the callback to use. If not specified, a Promise will be returned.
 
@@ -183,6 +234,10 @@ A few extra properties are set on the response object (which is a `http.Incoming
 * __request__: The request configuration that was generated by `bhttp`. You probably don't need this.
 * __requestState__: The request state that was accumulated by `bhttp`. You probably don't need this.
 
+Additionally, there's an extra event on the `response` object:
+
+* __'progress' (completedBytes, totalBytes)__: The 'download progress' for the response body. This works the same as the `onDownloadProgress` option, except the event will be specific to this response, and it allows for somewhat nicer syntax. Make sure to attach this handler *before* you start reading the response stream!
+
 `bhttp` can automatically parse the metadata for the following types of streams:
 
 * `fs` streams
@@ -190,7 +245,7 @@ A few extra properties are set on the response object (which is a `http.Incoming
 * `request` requests
 * `combined-stream` streams (assuming all the underlying streams are of one of the types listed here)
 
-If you are using a different type of streams, you can wrap the stream using `bhttp.wrapStream` to manually specify the needed metadata.
+If you are using a different type of stream, you can wrap the stream using `bhttp.wrapStream` to manually specify the needed metadata.
 
 ### bhttp.session([defaultOptions])
 
@@ -213,3 +268,51 @@ The resulting wrapper can be passed on to the `bhttp` methods as if it were a re
 ### bhttp.makeRequest(request, response, requestState)
 
 When using the `justPrepare` option, you can use this method to proceed with the request after manual modifications. The function signature is identical to the signature of the array returned when using `justPrepare`. `response` will usually be `null`, but must be passed on as is, to account for future API changes.
+
+## Error types
+
+All these correctly extend the `Error` class - this means that you can use them as a `.catch` predicate when using Promises, and that you can use `instanceof` on them when using the nodeback API.
+
+### bhttp.bhttpError
+
+The base class for all errors generated by `bhttp`. You usually don't need this.
+
+### bhttp.ConflictingOptionsError
+
+You have specified two or more request options that cannot be used together.
+
+The error message will contain more details.
+
+### bhttp.UnsupportedProtocolError
+
+You tried to load a URL that isn't using either the HTTP or HTTPS protocol. Only HTTP and HTTPS are currently supported.
+
+### bhttp.RedirectError
+
+A redirect was encountered that could not be followed.
+
+This could be because the redirect limit was reached, or because the HTTP specification doesn't allow automatic following of the redirect that was encountered.
+
+The error message will contain more details.
+
+### bhttp.MultipartError
+
+Something went wrong while generating the multipart/form-data stream.
+
+Currently, this will only be thrown if you try to use chunked transfer encoding for a multipart stream - a common situation where this can occur, is when you pass in streams with an unknown length.
+
+To resolve this error, you must either explicitly specify the length of the streams using `bhttp.wrapStream` or, if the target server supports it, enable the `allowChunkedMultipart` option.
+
+### bhttp.ConnectionTimeoutError
+
+The connection timed out.
+
+The connection timeout is defined by the operating system, and cannot currently be overridden.
+
+### bhttp.ResponseTimeoutError
+
+The response timed out.
+
+The response timeout can be specified using the `responseTimeout` option, and it is measured from the start of the request to the start of the response. If no response is received within the `responseTimeout`, a `ResponseTimeoutError` will be thrown asynchronously, and the request will be aborted.
+
+__You should not set a `responseTimeout` for requests that involve large file uploads!__ Because a response can only be received *after* the request has completed, any file/stream upload that takes longer than the `responseTimeout`, will result in a `ResponseTimeoutError`.

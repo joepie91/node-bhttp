@@ -17,37 +17,59 @@ _ = require "lodash"
 S = require "string"
 formFixArray = require "form-fix-array"
 errors = require "errors"
-debug = require("debug")("bhttp")
+debug = require("debug")
+debugRequest = debug("bhttp:request")
+debugResponse = debug("bhttp:response")
+extend = require "extend"
 
 # Other third-party modules
 formData = require "form-data2"
 concatStream = require "concat-stream"
 toughCookie = require "tough-cookie"
 streamLength = require "stream-length"
+sink = require "through2-sink"
+spy = require "through2-spy"
 
 # For the version in the user agent, etc.
 packageConfig = require "../package.json"
+
+bhttpErrors = {}
 
 # Error types
 
 errors.create
 	name: "bhttpError"
+	scope: bhttpErrors
 
 errors.create
 	name: "ConflictingOptionsError"
-	parents: errors.bhttpError
+	parents: bhttpErrors.bhttpError
+	scope: bhttpErrors
 
 errors.create
 	name: "UnsupportedProtocolError"
-	parents: errors.bhttpError
+	parents: bhttpErrors.bhttpError
+	scope: bhttpErrors
 
 errors.create
 	name: "RedirectError"
-	parents: errors.bhttpError
+	parents: bhttpErrors.bhttpError
+	scope: bhttpErrors
 
 errors.create
 	name: "MultipartError"
-	parents: errors.bhttpError
+	parents: bhttpErrors.bhttpError
+	scope: bhttpErrors
+
+errors.create
+	name: "ConnectionTimeoutError"
+	parents: bhttpErrors.bhttpError
+	scope: bhttpErrors
+
+errors.create
+	name: "ResponseTimeoutError"
+	parents: bhttpErrors.bhttpError
+	scope: bhttpErrors
 
 # Utility functions
 
@@ -69,7 +91,7 @@ isStream = (obj) ->
 # Middleware
 # NOTE: requestState is an object that signifies the current state of the overall request; eg. for a response involving one or more redirects, it will hold a 'redirect history'.
 prepareSession = (request, response, requestState) ->
-	debug "preparing session"
+	debugRequest "preparing session"
 	Promise.try ->
 		if requestState.sessionOptions?
 			# Request options take priority over session options
@@ -92,14 +114,14 @@ prepareSession = (request, response, requestState) ->
 				# Get the current cookie string for the URL
 				request.cookieJar.get request.url
 			.then (cookieString) ->
-				debug "sending cookie string: %s", cookieString
+				debugRequest "sending cookie string: %s", cookieString
 				request.options.headers["cookie"] = cookieString
 				Promise.resolve [request, response, requestState]
 		else
 			Promise.resolve [request, response, requestState]
 
 prepareDefaults = (request, response, requestState) ->
-	debug "preparing defaults"
+	debugRequest "preparing defaults"
 	Promise.try ->
 		# These are the options that we need for response processing, but don't need to be passed on to the http/https module.
 		request.responseOptions =
@@ -111,6 +133,8 @@ prepareDefaults = (request, response, requestState) ->
 			stream: request.options.stream ? false
 			justPrepare: request.options.justPrepare ? false
 			redirectLimit: request.options.redirectLimit ? 10
+			onDownloadProgress: request.options.onDownloadProgress
+			responseTimeout: request.options.responseTimeout
 
 		# Whether chunked transfer encoding for multipart/form-data payloads is acceptable. This is likely to break quietly on a lot of servers.
 		request.options.allowChunkedMultipart ?= false
@@ -127,7 +151,7 @@ prepareDefaults = (request, response, requestState) ->
 		Promise.resolve [request, response, requestState]
 
 prepareUrl = (request, response, requestState) ->
-	debug "preparing URL"
+	debugRequest "preparing URL"
 	Promise.try ->
 		# Parse the specified URL, and use the resulting information to build a complete `options` object
 		urlOptions = urlUtil.parse request.url, true
@@ -139,7 +163,7 @@ prepareUrl = (request, response, requestState) ->
 		Promise.resolve [request, response, requestState]
 
 prepareProtocol = (request, response, requestState) ->
-	debug "preparing protocol"
+	debugRequest "preparing protocol"
 	Promise.try ->
 		request.protocolModule = switch request.protocol
 			when "http" then http
@@ -147,7 +171,7 @@ prepareProtocol = (request, response, requestState) ->
 			else null
 
 		if not request.protocolModule?
-			return Promise.reject() new errors.UnsupportedProtocolError "The protocol specified (#{protocol}) is not currently supported by this module."
+			return Promise.reject() new bhttpErrors.UnsupportedProtocolError "The protocol specified (#{protocol}) is not currently supported by this module."
 
 		request.options.port ?= switch request.protocol
 			when "http" then 80
@@ -156,14 +180,14 @@ prepareProtocol = (request, response, requestState) ->
 		Promise.resolve [request, response, requestState]
 
 prepareOptions = (request, response, requestState) ->
-	debug "preparing options"
+	debugRequest "preparing options"
 	Promise.try ->
 		# Do some sanity checks - there are a number of options that cannot be used together
 		if (request.options.formFields? or request.options.files?) and (request.options.inputStream? or request.options.inputBuffer?)
-			return Promise.reject addErrorData(new errors.ConflictingOptionsError("You cannot define both formFields/files and a raw inputStream or inputBuffer."), request, response, requestState)
+			return Promise.reject addErrorData(new bhttpErrors.ConflictingOptionsError("You cannot define both formFields/files and a raw inputStream or inputBuffer."), request, response, requestState)
 
 		if request.options.encodeJSON and (request.options.inputStream? or request.options.inputBuffer?)
-			return Promise.reject addErrorData(new errors.ConflictingOptionsError("You cannot use both encodeJSON and a raw inputStream or inputBuffer.", undefined, "If you meant to JSON-encode the stream, you will currently have to do so manually."), request, response, requestState)
+			return Promise.reject addErrorData(new bhttpErrors.ConflictingOptionsError("You cannot use both encodeJSON and a raw inputStream or inputBuffer.", undefined, "If you meant to JSON-encode the stream, you will currently have to do so manually."), request, response, requestState)
 
 		# If the user plans on streaming the response, we need to disable the agent entirely - otherwise the streams will block the pool.
 		if request.responseOptions.stream
@@ -172,8 +196,11 @@ prepareOptions = (request, response, requestState) ->
 		Promise.resolve [request, response, requestState]
 
 preparePayload = (request, response, requestState) ->
-	debug "preparing payload"
+	debugRequest "preparing payload"
 	Promise.try ->
+		# Persist the download progress event handler on the request object, if there is one.
+		request.onUploadProgress = request.options.onUploadProgress
+
 		# If a 'files' parameter is present, then we will send the form data as multipart data - it's most likely binary data.
 		multipart = request.options.forceMultipart or request.options.files?
 
@@ -188,13 +215,13 @@ preparePayload = (request, response, requestState) ->
 		containsStreams = _.any request.options.formFields, (item) -> isStream(item)
 
 		if request.options.encodeJSON and containsStreams
-			return Promise.reject() new errors.ConflictingOptionsError "Sending a JSON-encoded payload containing data from a stream is not currently supported.", undefined, "Either don't use encodeJSON, or read your stream into a string or Buffer."
+			return Promise.reject() new bhttpErrors.ConflictingOptionsError "Sending a JSON-encoded payload containing data from a stream is not currently supported.", undefined, "Either don't use encodeJSON, or read your stream into a string or Buffer."
 
 		if request.options.method in ["post", "put", "patch"]
 			# Prepare the payload, and set the appropriate headers.
 			if (request.options.encodeJSON or request.options.formFields?) and not multipart
 				# We know the payload and its size in advance.
-				debug "got url-encodable form-data"
+				debugRequest "got url-encodable form-data"
 				request.options.headers["content-type"] = "application/x-www-form-urlencoded"
 
 				if request.options.encodeJSON
@@ -210,7 +237,7 @@ preparePayload = (request, response, requestState) ->
 				return Promise.resolve()
 			else if request.options.formFields? and multipart
 				# This is going to be multipart data, and we'll let `form-data` set the headers for us.
-				debug "got multipart form-data"
+				debugRequest "got multipart form-data"
 				formDataObject = new formData()
 
 				for fieldName, fieldValue of formFixArray(request.options.formFields)
@@ -238,7 +265,7 @@ preparePayload = (request, response, requestState) ->
 						Promise.resolve()
 			else if request.options.inputStream?
 				# A raw inputStream was provided, just leave it be.
-				debug "got inputStream"
+				debugRequest "got inputStream"
 				Promise.try ->
 					request.payloadStream = request.options.inputStream
 
@@ -247,20 +274,20 @@ preparePayload = (request, response, requestState) ->
 					else
 						streamLength request.options.inputStream
 				.then (length) ->
-					debug "length for inputStream is %s", length
+					debugRequest "length for inputStream is %s", length
 					request.options.headers["content-length"] = length
 				.catch (err) ->
-					debug "unable to determine inputStream length, switching to chunked transfer encoding"
+					debugRequest "unable to determine inputStream length, switching to chunked transfer encoding"
 					request.options.headers["content-transfer-encoding"] = "chunked"
 			else if request.options.inputBuffer?
 				# A raw inputBuffer was provided, just leave it be (but make sure it's an actual Buffer).
-				debug "got inputBuffer"
+				debugRequest "got inputBuffer"
 				if typeof request.options.inputBuffer == "string"
 					request.payload = new Buffer(request.options.inputBuffer) # Input string should be utf-8!
 				else
 					request.payload = request.options.inputBuffer
 
-				debug "length for inputBuffer is %s", request.payload.length
+				debugRequest "length for inputBuffer is %s", request.payload.length
 				request.options.headers["content-length"] = request.payload.length
 
 				return Promise.resolve()
@@ -272,10 +299,10 @@ preparePayload = (request, response, requestState) ->
 		Promise.resolve [request, response, requestState]
 
 prepareCleanup = (request, response, requestState) ->
-	debug "preparing cleanup"
+	debugRequest "preparing cleanup"
 	Promise.try ->
 		# Remove the options that we're not going to pass on to the actual http/https library.
-		delete request.options[key] for key in ["query", "formFields", "files", "encodeJSON", "inputStream", "inputBuffer", "discardResponse", "keepRedirectResponses", "followRedirects", "noDecode", "decodeJSON", "allowChunkedMultipart", "forceMultipart"]
+		delete request.options[key] for key in ["query", "formFields", "files", "encodeJSON", "inputStream", "inputBuffer", "discardResponse", "keepRedirectResponses", "followRedirects", "noDecode", "decodeJSON", "allowChunkedMultipart", "forceMultipart", "onUploadProgress", "onDownloadProgress"]
 
 		# Lo-Dash apparently has no `map` equivalent for object keys...?
 		fixedHeaders = {}
@@ -288,7 +315,7 @@ prepareCleanup = (request, response, requestState) ->
 # The guts of the module
 
 prepareRequest = (request, response, requestState) ->
-	debug "preparing request"
+	debugRequest "preparing request"
 	# FIXME: Mock httpd for testing functionality.
 	Promise.try ->
 		middlewareFunctions = [
@@ -310,41 +337,78 @@ prepareRequest = (request, response, requestState) ->
 		return promiseChain
 
 makeRequest = (request, response, requestState) ->
-	debug "making %s request to %s", request.options.method.toUpperCase(), request.url
+	debugRequest "making %s request to %s", request.options.method.toUpperCase(), request.url
 	Promise.try ->
 		# Instantiate a regular HTTP/HTTPS request
 		req = request.protocolModule.request request.options
 
-		# This is where we write our payload or stream to the request, and the actual request is made.
-		if request.payload?
-			# The entire payload is a single Buffer.
-			debug "sending payload"
-			req.write request.payload
-			req.end()
-		else if request.payloadStream?
-			# The payload is a stream.
-			debug "piping payloadStream"
-			if request.payloadStream._bhttpStreamWrapper?
-				request.payloadStream.stream.pipe req
-			else
-				request.payloadStream.pipe req
-		else
-			# For GET, HEAD, DELETE, etc. there is no payload, but we still need to call end() to complete the request.
-			debug "closing request without payload"
-			req.end()
+		timeoutTimer = null
 
 		new Promise (resolve, reject) ->
+			# Connection timeout handling, if one is set.
+			if request.responseOptions.responseTimeout?
+				debugRequest "setting response timeout timer to #{request.responseOptions.responseTimeout}ms..."
+				req.on "socket", (socket) ->
+					timeoutHandler = ->
+						debugRequest "a response timeout occurred!"
+						req.abort()
+						reject addErrorData(new bhttpErrors.ResponseTimeoutError("The response timed out."))
+
+					timeoutTimer = setTimeout(timeoutHandler, request.responseOptions.responseTimeout)
+
+			# Set up the upload progress monitoring.
+			totalBytes = request.options.headers["content-length"]
+			completedBytes = 0
+
+			progressStream = spy (chunk) ->
+				completedBytes += chunk.length
+				req.emit "progress", completedBytes, totalBytes
+
+			if request.onUploadProgress?
+				req.on "progress", (completedBytes, totalBytes) ->
+					request.onUploadProgress(completedBytes, totalBytes, req)
+
+			# This is where we write our payload or stream to the request, and the actual request is made.
+			if request.payload?
+				# The entire payload is a single Buffer. We'll still pretend that it's a stream for our progress events, though, to provide a consistent API.
+				debugRequest "sending payload"
+				req.emit "progress", request.payload.length, request.payload.length
+				req.write request.payload
+				req.end()
+			else if request.payloadStream?
+				# The payload is a stream.
+				debugRequest "piping payloadStream"
+				if request.payloadStream._bhttpStreamWrapper?
+					request.payloadStream.stream
+						.pipe progressStream
+						.pipe req
+				else
+					request.payloadStream
+						.pipe progressStream
+						.pipe req
+			else
+				# For GET, HEAD, DELETE, etc. there is no payload, but we still need to call end() to complete the request.
+				debugRequest "closing request without payload"
+				req.end()
+
 			# In case something goes wrong during this process, somehow...
 			req.on "error", (err) ->
-				reject err
+				if err.code == "ETIMEDOUT"
+					debugRequest "a connection timeout occurred!"
+					reject addErrorData(new bhttpErrors.ConnectionTimeoutError("The connection timed out."))
+				else
+					reject err
 
 			req.on "response", (res) ->
+				if timeoutTimer?
+					debugResponse "got response in time, clearing response timeout timer"
+					clearTimeout(timeoutTimer)
 				resolve res
 	.then (response) ->
 		Promise.resolve [request, response, requestState]
 
 processResponse = (request, response, requestState) ->
-	debug "processing response, got status code %s", response.statusCode
+	debugResponse "processing response, got status code %s", response.statusCode
 
 	# When we receive the response, we'll buffer it up and/or decode it, depending on what the user specified, and resolve the returned Promise. If the user just wants the raw stream, we resolve immediately after receiving a response.
 
@@ -352,7 +416,7 @@ processResponse = (request, response, requestState) ->
 		# First, if a cookie jar is set and we received one or more cookies from the server, we should store them in our cookieJar.
 		if request.cookieJar? and response.headers["set-cookie"]?
 			promises = for cookieHeader in response.headers["set-cookie"]
-				debug "storing cookie: %s", cookieHeader
+				debugResponse "storing cookie: %s", cookieHeader
 				request.cookieJar.set cookieHeader, request.url
 			Promise.all promises
 		else
@@ -365,7 +429,7 @@ processResponse = (request, response, requestState) ->
 
 		if response.statusCode in [301, 302, 303, 307] and request.responseOptions.followRedirects
 			if requestState.redirectHistory.length >= (request.responseOptions.redirectLimit - 1)
-				return Promise.reject addErrorData(new errors.RedirectError("The maximum amount of redirects ({request.responseOptions.redirectLimit}) was reached."))
+				return Promise.reject addErrorData(new bhttpErrors.RedirectError("The maximum amount of redirects ({request.responseOptions.redirectLimit}) was reached."))
 
 			# 301: For GET and HEAD, redirect unchanged. For POST, PUT, PATCH, DELETE, "ask user" (in our case: throw an error.)
 			# 302: Redirect, change method to GET.
@@ -377,21 +441,38 @@ processResponse = (request, response, requestState) ->
 						when "get", "head"
 							return redirectUnchanged request, response, requestState
 						when "post", "put", "patch", "delete"
-							return Promise.reject addErrorData(new errors.RedirectError("Encountered a 301 redirect for POST, PUT, PATCH or DELETE. RFC says we can't automatically continue."), request, response, requestState)
+							return Promise.reject addErrorData(new bhttpErrors.RedirectError("Encountered a 301 redirect for POST, PUT, PATCH or DELETE. RFC says we can't automatically continue."), request, response, requestState)
 						else
-							return Promise.reject addErrorData(new errors.RedirectError("Encountered a 301 redirect, but not sure how to proceed for the #{request.options.method.toUpperCase()} method."))
+							return Promise.reject addErrorData(new bhttpErrors.RedirectError("Encountered a 301 redirect, but not sure how to proceed for the #{request.options.method.toUpperCase()} method."))
 				when 302, 303
 					return redirectGet request, response, requestState
 				when 307
 					if request.containsStreams and request.options.method not in ["get", "head"]
-						return Promise.reject addErrorData(new errors.RedirectError("Encountered a 307 redirect for POST, PUT or DELETE, but your payload contained (single-use) streams. We therefore can't automatically follow the redirect."), request, response, requestState)
+						return Promise.reject addErrorData(new bhttpErrors.RedirectError("Encountered a 307 redirect for POST, PUT or DELETE, but your payload contained (single-use) streams. We therefore can't automatically follow the redirect."), request, response, requestState)
 					else
 						return redirectUnchanged request, response, requestState
 		else if request.responseOptions.discardResponse
 			response.resume() # Drain the response stream
 			Promise.resolve response
 		else
+			totalBytes = response.headers["content-length"]
+			if totalBytes? # Otherwise `undefined` will turn into `NaN`, and we don't want that.
+				totalBytes = parseInt(totalBytes)
+			completedBytes = 0
+
+			progressStream = sink (chunk) ->
+				completedBytes += chunk.length
+				response.emit "progress", completedBytes, totalBytes
+
+			if request.responseOptions.onDownloadProgress?
+				response.on "progress", (completedBytes, totalBytes) ->
+					request.responseOptions.onDownloadProgress(completedBytes, totalBytes, response)
+
 			new Promise (resolve, reject) ->
+				# This is slightly hacky, but returning a .pipe'd stream would make all the response object attributes unavailable to the end user. Therefore, 'branching' the stream into our progress monitoring stream is a much better option. We use .pause() to ensure the stream doesn't start flowing until the end user (or our library) has actually piped it into something.
+				response.pipe(progressStream)
+				response.pause()
+
 				if request.responseOptions.stream
 					resolve response
 				else
@@ -428,7 +509,7 @@ doPayloadRequest = (url, data, options, callback) ->
 	@request url, options, callback
 
 redirectGet = (request, response, requestState) ->
-	debug "following forced-GET redirect to %s", response.headers["location"]
+	debugResponse "following forced-GET redirect to %s", response.headers["location"]
 	Promise.try ->
 		options = _.clone(requestState.originalOptions)
 		options.method = "get"
@@ -438,7 +519,7 @@ redirectGet = (request, response, requestState) ->
 		doRedirect request, response, requestState, options
 
 redirectUnchanged = (request, response, requestState) ->
-	debug "following same-method redirect to %s", response.headers["location"]
+	debugResponse "following same-method redirect to %s", response.headers["location"]
 	Promise.try ->
 		options = _.clone(requestState.originalOptions)
 		doRedirect request, response, requestState, options
@@ -540,6 +621,8 @@ bhttpAPI =
 			stream: stream
 			options: options
 		}
+
+extend(bhttpAPI, bhttpErrors)
 
 module.exports = bhttpAPI
 
