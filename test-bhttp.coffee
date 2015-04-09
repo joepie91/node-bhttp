@@ -2,6 +2,7 @@ bhttp = require "./"
 Promise = require "bluebird"
 fs = require "fs"
 util = require "util"
+devNull = require "dev-null"
 
 requestbinTarget = process.argv[2]
 if not requestbinTarget
@@ -118,7 +119,7 @@ testcases.push(Promise.try ->
 )
 
 testcases.push(Promise.try ->
-	# Cookie test
+	# No-redirect test
 	session = bhttp.session()
 	session.post "http://www.html-kit.com/tools/cookietester/",
 		cn: "testkey1"
@@ -128,10 +129,20 @@ testcases.push(Promise.try ->
 	console.log "NO-REDIR", response.headers["location"]
 )
 
+testcases.push(Promise.try ->
+	# Redirect test
+	bhttp.get "http://google.com/"
+.then (response) ->
+	console.log "REDIR", response.headers["location"], response.redirectHistory.length
+)
+
 Promise.all testcases
 	.then ->
 		bhttp.get "http://posttestserver.com/files/2015/01/19/f_03.01.01627545156", stream: true
 	.then (response) ->
 		#response.pipe process.stdout
-		response.resume()
+		response
+			.pipe(devNull())
+			.on "finish", ->
+				console.log "GET STREAM", "ok"
 

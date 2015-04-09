@@ -21,6 +21,7 @@ debug = require("debug")
 debugRequest = debug("bhttp:request")
 debugResponse = debug("bhttp:response")
 extend = require "extend"
+devNull = require "dev-null"
 
 # Other third-party modules
 formData = require "form-data2"
@@ -452,7 +453,7 @@ processResponse = (request, response, requestState) ->
 					else
 						return redirectUnchanged request, response, requestState
 		else if request.responseOptions.discardResponse
-			response.resume() # Drain the response stream
+			response.pipe(devNull()) # Drain the response stream
 			Promise.resolve response
 		else
 			totalBytes = response.headers["content-length"]
@@ -469,10 +470,29 @@ processResponse = (request, response, requestState) ->
 					request.responseOptions.onDownloadProgress(completedBytes, totalBytes, response)
 
 			new Promise (resolve, reject) ->
-				# This is slightly hacky, but returning a .pipe'd stream would make all the response object attributes unavailable to the end user. Therefore, 'branching' the stream into our progress monitoring stream is a much better option. We use .pause() to ensure the stream doesn't start flowing until the end user (or our library) has actually piped it into something.
-				response.pipe(progressStream)
-				response.pause()
+				# This is a very, very dirty hack - however, using .pipe followed by .pause breaks in Node.js v0.10.35 with "Cannot switch to old mode now". Our solution is to monkeypatch the `on` and `resume` methods to attach the progress event handler as soon as something else is attached to the response stream (or when it is drained). This way, a user can also pipe the response in a later tick, without the stream draining prematurely.
+				_resume = response.resume.bind(response)
+				_on = response.on.bind(response)
+				_progressStreamAttached = false
 
+				attachProgressStream = ->
+					# To keep this from sending us into an infinite loop.
+					if not _progressStreamAttached
+						debugResponse "attaching progress stream"
+						_progressStreamAttached = true
+						response.pipe(progressStream)
+
+				response.on = (eventName, handler) ->
+					debugResponse "'on' called, #{eventName}"
+					if eventName == "data" or eventName == "readable"
+						attachProgressStream()
+					_on(eventName, handler)
+
+				response.resume = ->
+					attachProgressStream()
+					_resume()
+
+				# Continue with the regular response processing.
 				if request.responseOptions.stream
 					resolve response
 				else
@@ -527,7 +547,7 @@ redirectUnchanged = (request, response, requestState) ->
 doRedirect = (request, response, requestState, newOptions) ->
 	Promise.try ->
 		if not request.responseOptions.keepRedirectResponses
-			response.resume() # Let the response stream drain out...
+			response.pipe(devNull()) # Let the response stream drain out...
 
 		requestState.redirectHistory.push response
 		bhttpAPI._doRequest response.headers["location"], newOptions, requestState

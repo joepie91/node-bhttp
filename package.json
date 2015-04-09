@@ -1,6 +1,6 @@
 {
   "name": "bhttp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A sane HTTP client library for Node.js with Streams2 support.",
   "main": "index.js",
   "scripts": {
@@ -25,6 +25,7 @@
     "bluebird": "^2.8.2",
     "concat-stream": "^1.4.7",
     "debug": "^2.1.1",
+    "dev-null": "^0.1.1",
     "errors": "^0.2.0",
     "extend": "^2.0.0",
     "form-data2": "^1.0.0",

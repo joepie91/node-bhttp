@@ -1,6 +1,7 @@
 Promise = require "bluebird"
 bhttp = require "./"
 fs = require "fs"
+devNull = require "dev-null"
 
 formatLine = (line) -> line.toString().replace(/\n/g, "\\n").replace(/\r/g, "\\r")
 
@@ -32,6 +33,6 @@ Promise.try ->
 	console.log "Got response"
 	response.on "progress", (completedBytes, totalBytes, request) ->
 			console.log "#{completedBytes / totalBytes * 100}%", completedBytes, totalBytes
-	response.resume()
+	response.pipe(devNull())
 	response.on "end", ->
 		console.log "Completed response download"
