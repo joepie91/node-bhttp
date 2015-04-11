@@ -177,7 +177,7 @@ The various error types are documented at the bottom of this README.
 ### bhttp.put(url, [data, [options, [callback]]])
 ### bhttp.patch(url, [data, [options, [callback]]])
 
-Convenience methods that pre-set the request method, and automatically send along the payload using the correct options.
+Convenience methods that pre-set the request method, and automatically send along the payload using the correct options for `bhttp.request`.
 
 * __url__: The URL to request, with protocol. When using HTTPS, please be sure to read the 'Caveats' section.
 * __data__: *Optional, only for POST/PUT/PATCH.* The payload to send along.
@@ -189,6 +189,8 @@ The `data` payload can be one of the following things:
 * __String / Buffer__: The contents will be written to the request as-is.
 * __A stream__: The entire stream will be written to the request as-is.
 * __An object__: Will be encoded as form data, and can contain any combination of Strings, Buffers, streams, and arrays of any of those. When only strings are used, the form data is querystring-encoded - if Buffers or streams are used, it will be encoded as multipart/form-data.
+
+Further documentation for these methods, such as the response attributes, can be found in the below section for `bhttp.request`.
 
 ### bhttp.request(url, [options, [callback]])
 
