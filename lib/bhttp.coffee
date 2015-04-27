@@ -552,7 +552,7 @@ doRedirect = (request, response, requestState, newOptions) ->
 			response.pipe(devNull()) # Let the response stream drain out...
 
 		requestState.redirectHistory.push response
-		bhttpAPI._doRequest response.headers["location"], newOptions, requestState
+		bhttpAPI._doRequest urlUtil.resolve(request.url, response.headers["location"]), newOptions, requestState
 
 createCookieJar = (jar) ->
 	# Creates a cookie jar wrapper with a simplified API.
