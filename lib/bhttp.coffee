@@ -218,7 +218,7 @@ preparePayload = (request, response, requestState) ->
 		if request.options.encodeJSON and containsStreams
 			return Promise.reject() new bhttpErrors.ConflictingOptionsError "Sending a JSON-encoded payload containing data from a stream is not currently supported.", undefined, "Either don't use encodeJSON, or read your stream into a string or Buffer."
 
-		if request.options.method in ["post", "put", "patch"]
+		if request.options.method not in ["get", "head", "delete"]
 			# Prepare the payload, and set the appropriate headers.
 			if (request.options.encodeJSON or request.options.formFields?) and not multipart
 				# We know the payload and its size in advance.
@@ -293,6 +293,9 @@ preparePayload = (request, response, requestState) ->
 				debugRequest "length for inputBuffer is %s", request.payload.length
 				request.options.headers["content-length"] = request.payload.length
 
+				return Promise.resolve()
+			else
+				# No payload specified.
 				return Promise.resolve()
 		else
 			# GET, HEAD and DELETE should not have a payload. While technically not prohibited by the spec, it's also not specified, and we'd rather not upset poorly-compliant webservers.
