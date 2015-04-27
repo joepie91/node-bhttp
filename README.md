@@ -2,7 +2,7 @@
 
 A sane HTTP client library for Node.js with Streams2 support.
 
-![](//img.shields.io/gratipay/joepie91.svg)
+[![](//img.shields.io/gratipay/joepie91.svg)](https://gratipay.com/joepie91)
 
 ## Why bhttp?
 
