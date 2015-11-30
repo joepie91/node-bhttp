@@ -589,7 +589,7 @@ bhttpAPI =
 	patch: (url, data, options = {}, callback) ->
 		options.method = "patch"
 		doPayloadRequest.bind(this) url, data, options, callback
-	delete: (url, data, options = {}, callback) ->
+	delete: (url, options = {}, callback) ->
 		options.method = "delete"
 		@request url, options, callback
 	request: (url, options = {}, callback) ->
