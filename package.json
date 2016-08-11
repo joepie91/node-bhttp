@@ -35,7 +35,7 @@
     "string": "^3.0.0",
     "through2-sink": "^1.0.0",
     "through2-spy": "^1.2.0",
-    "tough-cookie": "^0.12.1"
+    "tough-cookie": "^2.3.1"
   },
   "devDependencies": {
     "gulp": "~3.8.0",
