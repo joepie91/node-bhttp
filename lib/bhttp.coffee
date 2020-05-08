@@ -226,16 +226,19 @@ preparePayload = (request, response, requestState) ->
 
 				if request.options.encodeJSON
 					debugRequest "... but encodeJSON was set, so we will send JSON instead"
-					request.options.headers["content-type"] = "application/json"
+					request.options.headers["content-type"] = "application/json; charset=utf-8"
 					request.payload = JSON.stringify request.options.formFields ? null
+					# strings are utf-16, so string.length can be wrong
+					request.options.headers["content-length"] = Buffer.byteLength(request.payload, "utf8")
 				else if not _.isEmpty request.options.formFields
 					# The `querystring` module copies the key name verbatim, even if the value is actually an array. Things like PHP don't understand this, and expect every array-containing key to be suffixed with []. We'll just append that ourselves, then.
 					request.options.headers["content-type"] = "application/x-www-form-urlencoded"
 					request.payload = querystring.stringify formFixArray(request.options.formFields)
+					# URI encoded string is assumed to be ascii
+					request.options.headers["content-length"] = request.payload.length
 				else
 					request.payload = ""
-
-				request.options.headers["content-length"] = request.payload.length
+					request.options.headers["content-length"] = 0
 
 				return Promise.resolve()
 			else if request.options.formFields? and multipart
