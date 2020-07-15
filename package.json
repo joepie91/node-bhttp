@@ -30,7 +30,7 @@
     "extend": "^2.0.0",
     "form-data2": "^1.0.0",
     "form-fix-array": "^1.0.0",
-    "lodash": "^2.4.1",
+    "lodash": "^4.17.19",
     "stream-length": "^1.0.2",
     "string": "^3.0.0",
     "through2-sink": "^1.0.0",
